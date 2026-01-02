@@ -76,7 +76,8 @@ This server expects environment variables to be provided by the runtime (IDE run
 ### Optional (Recommended)
 - `GITHUB_TOKEN`: GitHub Personal Access Token used to retrieve GitHub Issue threads via GitHub APIs.
   - Create it in GitHub → Settings → Developer settings → Personal access tokens.
-  - For public repos: a classic token with `public_repo` is usually enough. For private repos: `repo` (or equivalent fine-grained read permissions).
+  - For public repos, a **read-only token** is highly recommended: it enables richer `get_content()` / `web_search(return_full_pages=true)` results for GitHub Issues pages. It is not mandatory, but without it GitHub Issues URLs may fall back to generic HTML extraction and produce a poorer representation (missing full thread context).
+  - For classic tokens: `public_repo` is usually enough for public repositories. For private repos: `repo` (or equivalent fine-grained read permissions).
 - `WIKIPEDIA_USER_AGENT`: Wikimedia asks API clients to use a descriptive User-Agent (ideally with contact info).
 - `ARXIV_USER_AGENT`: User-Agent string for arXiv API + PDF requests.
 
@@ -164,6 +165,7 @@ CLI install (stdio):
 ```bash
 claude mcp add --transport stdio kindly-web-search \
   --env SERPER_API_KEY="$SERPER_API_KEY" \
+  --env GITHUB_TOKEN="$GITHUB_TOKEN" \
   -- "$(pwd)/.venv-codex/bin/mcp-web-search" --stdio
 ```
 
@@ -189,6 +191,7 @@ CLI install (stdio):
 ```bash
 codex mcp add kindly-web-search \
   --env SERPER_API_KEY="$SERPER_API_KEY" \
+  --env GITHUB_TOKEN="$GITHUB_TOKEN" \
   -- mcp-web-search --stdio
 ```
 
@@ -317,6 +320,7 @@ Run as a stdio MCP server (works with clients that can launch `docker run -i ...
 ```bash
 docker run -i --rm \
   -e SERPER_API_KEY \
+  -e GITHUB_TOKEN \
   mcp-web-search:local --stdio
 ```
 
@@ -324,6 +328,7 @@ Run as Streamable HTTP (for gateways / remote clients):
 ```bash
 docker run --rm -p 8000:8000 \
   -e SERPER_API_KEY \
+  -e GITHUB_TOKEN \
   -e FASTMCP_HOST=0.0.0.0 \
   -e FASTMCP_PORT=8000 \
   mcp-web-search:local --http
