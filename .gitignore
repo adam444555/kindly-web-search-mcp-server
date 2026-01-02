@@ -1,0 +1,6 @@
+/tests/.env.test
+/.venv/
+/.venv-codex/
+/.serena/
+/AGENTS.md
+/docs/
