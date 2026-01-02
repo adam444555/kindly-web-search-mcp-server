@@ -147,13 +147,24 @@ This server supports both:
 
 Important: in **stdio** mode, stdout is reserved for the MCP protocol. This repo avoids printing on stdout during tool execution.
 
+Note: the command you configure must be executable in the environment your client runs in. If you installed this server
+into a virtualenv, prefer using an **absolute path** to the virtualenv executable (Claude Code does not run MCP servers
+from your project directory, so relative paths often break).
+
 ### Claude Code
+
+Prereq (WSL/Linux): install into the repo virtualenv so the executable exists:
+```bash
+python -m venv .venv-codex
+.venv-codex/bin/python -m pip install -U pip
+.venv-codex/bin/python -m pip install -e .
+```
 
 CLI install (stdio):
 ```bash
 claude mcp add --transport stdio kindly-web-search \
   --env SERPER_API_KEY="$SERPER_API_KEY" \
-  -- mcp-web-search --stdio
+  -- "$(pwd)/.venv-codex/bin/mcp-web-search" --stdio
 ```
 
 Project config (`.mcp.json` in repo root):
@@ -161,7 +172,7 @@ Project config (`.mcp.json` in repo root):
 {
   "mcpServers": {
     "kindly-web-search": {
-      "command": "mcp-web-search",
+      "command": "/ABS/PATH/TO/REPO/.venv-codex/bin/mcp-web-search",
       "args": ["--stdio"],
       "env": {
         "SERPER_API_KEY": "${SERPER_API_KEY}",
