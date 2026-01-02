@@ -108,7 +108,11 @@ pip install -e ".[dev]"
 ### Option B: `uv` (fast, zero-friction)
 If you use `uv`, you can run without activating a virtualenv:
 ```bash
+# When launched by an MCP client (stdio):
 uv run -m kindly_web_search_mcp_server --stdio
+
+# For manual testing (Streamable HTTP):
+uv run -m kindly_web_search_mcp_server --http --host 127.0.0.1 --port 8000
 ```
 
 ### Environment variables
@@ -124,6 +128,9 @@ An entrypoint is provided via `pyproject.toml`:
 - `mcp-server` → `kindly_web_search_mcp_server.server:main`
 - `mcp-web-search` → `kindly_web_search_mcp_server.server:main` (recommended; less likely to conflict)
 - `kindly-web-search` → `kindly_web_search_mcp_server.server:main` (alias)
+
+Note: `--stdio` is meant to be launched by an MCP client. If you run it directly in a terminal and press Enter, the
+server will try to parse your input as JSON-RPC and log errors. For interactive/manual runs, prefer `--http`.
 
 Examples:
 ```bash

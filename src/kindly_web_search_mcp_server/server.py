@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -109,6 +110,25 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     transport = _resolve_transport(args.transport)
+
+    if (
+        transport == "stdio"
+        and sys.stdin.isatty()
+        and os.environ.get("MCP_ALLOW_TTY_STDIO", "").strip().lower() not in ("1", "true", "yes")
+    ):
+        print(
+            "Error: `--stdio` transport is intended to be launched by an MCP client (stdin/stdout JSON-RPC).",
+            file=sys.stderr,
+        )
+        print(
+            "Tip: for manual testing, run with `--http` (Streamable HTTP) instead.",
+            file=sys.stderr,
+        )
+        print(
+            "Override: set MCP_ALLOW_TTY_STDIO=1 to force stdio even when stdin is a TTY.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     if not os.environ.get("SERPER_API_KEY"):
         # Do not hard-fail on startup: many clients set env vars in their MCP config
