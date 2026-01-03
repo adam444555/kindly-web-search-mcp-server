@@ -189,7 +189,9 @@ async def _fetch_html(
     base_backoff_seconds = _resolve_retry_backoff_seconds()
     snap_multiplier = _resolve_snap_backoff_multiplier() if is_snap else 1.0
 
-    with tempfile.TemporaryDirectory(prefix="kindly-nodriver-") as user_data_dir:
+    # Chromium may still be flushing profile writes briefly after `browser.stop()`.
+    # Never fail the request because a temp profile directory couldn't be deleted.
+    with tempfile.TemporaryDirectory(prefix="kindly-nodriver-", ignore_cleanup_errors=True) as user_data_dir:
         try:
             last_start_error: BaseException | None = None
             for attempt in range(attempts):
@@ -277,6 +279,8 @@ async def _fetch_html(
                         maybe = stopper()
                         if asyncio.iscoroutine(maybe):
                             await maybe
+                # Give Chromium a short moment to flush profile writes before temp cleanup.
+                await asyncio.sleep(0.1)
             except Exception:
                 pass
 

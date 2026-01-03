@@ -5,6 +5,55 @@ from unittest.mock import AsyncMock, patch
 
 
 class TestNodriverWorkerSandbox(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_ignore_cleanup_errors_for_profile_dir(self) -> None:
+        from kindly_web_search_mcp_server.scrape import nodriver_worker
+
+        class _FakePage:
+            def get_content(self):
+                return "<html><body>ok</body></html>"
+
+            async def close(self):
+                return None
+
+        class _FakeBrowser:
+            async def get(self, _url: str):
+                return _FakePage()
+
+            async def stop(self):
+                return None
+
+        fake_start = AsyncMock(return_value=_FakeBrowser())
+        captured: dict[str, object] = {}
+
+        class _TempDir:
+            def __init__(self, *args, **kwargs):
+                captured["kwargs"] = dict(kwargs)
+
+            def __enter__(self):
+                return "/tmp/kindly-nodriver-test"
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with (
+            patch.dict("sys.modules", {"nodriver": type("X", (), {"start": fake_start})}),
+            patch.dict("os.environ", {}, clear=False),
+            patch("shutil.which", return_value="/usr/bin/chromium"),
+            patch.object(nodriver_worker.tempfile, "TemporaryDirectory", _TempDir),
+            patch.object(nodriver_worker.asyncio, "sleep", AsyncMock()),
+        ):
+            html = await nodriver_worker._fetch_html(
+                "https://example.com",
+                referer=None,
+                user_agent="ua",
+                wait_seconds=0.0,
+                browser_executable_path=None,
+            )
+
+        self.assertIn("ok", html)
+        kwargs = captured.get("kwargs") or {}
+        self.assertTrue(kwargs.get("ignore_cleanup_errors"))
+
     async def test_disables_sandbox_by_default(self) -> None:
         from kindly_web_search_mcp_server.scrape.nodriver_worker import _fetch_html
 

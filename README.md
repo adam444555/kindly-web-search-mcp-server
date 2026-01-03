@@ -84,119 +84,230 @@ Windows (PowerShell):
 irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-Restart your terminal so `uvx` is available.
-
-Verify:
+Re-open your terminal and verify:
 ```bash
 uvx --version
 ```
 
-### 2) Install Chromium (needed by `nodriver`)
-macOS (Homebrew):
+### 2) Install a Chromium-based browser (required for `page_content`)
+You need **Chrome / Chromium / Edge / Brave** installed on the same machine running your MCP client.
+
+macOS:
+- Install Chrome, or:
 ```bash
 brew install --cask chromium
 ```
 
 Windows:
-- Install **Chrome** or **Edge** normally.
-- Optional (PowerShell): `winget install --id Google.Chrome -e`
+- Install Chrome or Edge.
+- If browser auto-detection fails later, you’ll need the path:
+```powershell
+Get-Command chrome | Select-Object -ExpandProperty Source
+# Common path:
+# C:\Program Files\Google\Chrome\Application\chrome.exe
+# If `Get-Command chrome` fails, try one of these:
+# C:\Program Files (x86)\Google\Chrome\Application\chrome.exe
+# C:\Program Files\Microsoft\Edge\Application\msedge.exe
+```
 
 Linux (Ubuntu/Debian):
 ```bash
 sudo apt-get update
-sudo apt-get install -y chromium-browser
-python -m playwright install chromium
-PW_CHROME="$(find ~/.cache/ms-playwright -type f -executable \( -name chrome -o -name chromium \) | head -n 1)"
-echo "$PW_CHROME"
-# Verify that chromium path exists
+sudo apt-get install -y chromium
+which chromium
 ```
+Other Linux distros: install `chromium` (or `chromium-browser`) via your package manager.
 
-Linux (Fedora):
-```bash
-sudo dnf install -y chromium
-```
-
-### 3) Set your key(s)
-Set **one** search key (required):
+### 3) Set your search API key (required)
+Set **one** of these:
 
 macOS / Linux:
 ```bash
 export SERPER_API_KEY="..."
-# or: export TAVILY_API_KEY="..."
+# or:
+export TAVILY_API_KEY="..."
 ```
 
 Windows (PowerShell):
 ```powershell
 $env:SERPER_API_KEY="..."
-# or: $env:TAVILY_API_KEY="..."
+# or:
+$env:TAVILY_API_KEY="..."
 ```
 
-Optional:
+Optional (recommended for better GitHub Issue / PR extraction):
 ```bash
 export GITHUB_TOKEN="..."
 ```
+For public repos, a read-only token is enough (classic tokens often use `public_repo`; fine-grained tokens need repo read access).
 
-Windows (PowerShell):
-```powershell
-$env:GITHUB_TOKEN="..."
-```
-
-If you want the best results when searching/debugging, set `GITHUB_TOKEN`: it lets the server render GitHub Issues/PRs with structure (question, each answer/comment, reactions, and metadata). Use a read-only token limited to public repositories.
-
-### 4) Add the MCP server to your client
-If you don’t have `GITHUB_TOKEN` yet, you can omit it, but GitHub Issues/PRs will be extracted with less structure.
-
-**Codex (recommended: CLI)**
-macOS / Linux:
-```bash
-codex mcp add kindly-web-search \
-  --env SERPER_API_KEY="$SERPER_API_KEY" \
-  --env GITHUB_TOKEN="$GITHUB_TOKEN" \
-  --env KINDLY_BROWSER_EXECUTABLE_PATH=="$PW_CHROME" \
-  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server \
-  kindly-web-search-mcp-server start-mcp-server
-```
-
-Windows (PowerShell):
-```powershell
-codex mcp add kindly-web-search `
-  --env SERPER_API_KEY="$env:SERPER_API_KEY" `
-  --env GITHUB_TOKEN="$env:GITHUB_TOKEN" `
-  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server `
-  kindly-web-search-mcp-server start-mcp-server
-```
-
-**Claude Code (recommended: CLI)**
-macOS / Linux:
-```bash
-claude mcp add --transport stdio kindly-web-search \
-  --env SERPER_API_KEY="$SERPER_API_KEY" \
-  --env GITHUB_TOKEN="$GITHUB_TOKEN" \
-  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server \
-  kindly-web-search-mcp-server start-mcp-server
-```
-
-Windows (PowerShell):
-```powershell
-claude mcp add --transport stdio kindly-web-search `
-  --env SERPER_API_KEY="$env:SERPER_API_KEY" `
-  --env GITHUB_TOKEN="$env:GITHUB_TOKEN" `
-  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server `
-  kindly-web-search-mcp-server start-mcp-server
-```
-
-Only set **one** search key. If you use Tavily instead of Serper, use `TAVILY_API_KEY` *instead of* `SERPER_API_KEY`.
-
-## Details
-
-### The server command (for any MCP client)
+### 4) Run command used by all MCP clients
 ```bash
 uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server \
   kindly-web-search-mcp-server start-mcp-server
 ```
 
-### Browser setup (when auto-detection fails)
-If the server can’t find a browser, set `KINDLY_BROWSER_EXECUTABLE_PATH` to your browser binary.
+Now configure your MCP client to run that command.
+Make sure your API keys are set in the same shell/OS environment that launches the MCP client (unless you paste them directly into the client config).
+
+## Client setup
+
+### Codex (recommended)
+Set either `SERPER_API_KEY` or `TAVILY_API_KEY` (you can omit the other).
+Edit `~/.codex/config.toml`:
+```toml
+[mcp_servers.kindly-web-search]
+command = "uvx"
+args = [
+  "--from",
+  "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
+  "kindly-web-search-mcp-server",
+  "start-mcp-server",
+]
+# Forward variables from your shell/OS environment:
+env_vars = ["SERPER_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH"]
+startup_timeout_sec = 60.0
+```
+
+### Claude Code
+Set either `SERPER_API_KEY` or `TAVILY_API_KEY` (you can omit the other).
+Create/edit `.mcp.json` (project scope) or `~/.config/claude-code/.mcp.json` (user scope):
+```json
+{
+  "mcpServers": {
+    "kindly-web-search": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
+        "kindly-web-search-mcp-server",
+        "start-mcp-server"
+      ],
+      "env": {
+        "SERPER_API_KEY": "${SERPER_API_KEY}",
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}",
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}",
+        "KINDLY_BROWSER_EXECUTABLE_PATH": "${KINDLY_BROWSER_EXECUTABLE_PATH}"
+      }
+    }
+  }
+}
+```
+
+### Gemini CLI
+Set either `SERPER_API_KEY` or `TAVILY_API_KEY` (you can omit the other).
+Edit `~/.gemini/settings.json` (or `.gemini/settings.json` in a project):
+```json
+{
+  "mcpServers": {
+    "kindly-web-search": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
+        "kindly-web-search-mcp-server",
+        "start-mcp-server"
+      ],
+      "env": {
+        "SERPER_API_KEY": "$SERPER_API_KEY",
+        "TAVILY_API_KEY": "$TAVILY_API_KEY",
+        "GITHUB_TOKEN": "$GITHUB_TOKEN",
+        "KINDLY_BROWSER_EXECUTABLE_PATH": "$KINDLY_BROWSER_EXECUTABLE_PATH"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+Set either `SERPER_API_KEY` or `TAVILY_API_KEY` (you can omit the other).
+Create `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "kindly-web-search": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
+        "kindly-web-search-mcp-server",
+        "start-mcp-server"
+      ],
+      "env": {
+        "SERPER_API_KEY": "${env:SERPER_API_KEY}",
+        "TAVILY_API_KEY": "${env:TAVILY_API_KEY}",
+        "GITHUB_TOKEN": "${env:GITHUB_TOKEN}",
+        "KINDLY_BROWSER_EXECUTABLE_PATH": "${env:KINDLY_BROWSER_EXECUTABLE_PATH}"
+      }
+    }
+  }
+}
+```
+
+### Claude Desktop
+Edit `claude_desktop_config.json`:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\\Claude\\claude_desktop_config.json`
+
+Note: values in this file are literal strings. Don’t commit this file or share it.
+
+```json
+{
+  "mcpServers": {
+    "kindly-web-search": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
+        "kindly-web-search-mcp-server",
+        "start-mcp-server"
+      ],
+      "env": {
+        "SERPER_API_KEY": "PASTE_SERPER_KEY_OR_LEAVE_EMPTY",
+        "TAVILY_API_KEY": "PASTE_TAVILY_KEY_OR_LEAVE_EMPTY",
+        "GITHUB_TOKEN": "PASTE_GITHUB_TOKEN_OR_LEAVE_EMPTY",
+        "KINDLY_BROWSER_EXECUTABLE_PATH": "PASTE_IF_NEEDED"
+      }
+    }
+  }
+}
+```
+
+### GitHub Copilot / Microsoft Copilot (VS Code)
+Most secure option: uses interactive prompts, so secrets don’t need to be stored in the file.
+Create `.vscode/mcp.json`:
+```json
+{
+  "servers": {
+    "kindly-web-search": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
+        "kindly-web-search-mcp-server",
+        "start-mcp-server"
+      ],
+      "env": {
+        "SERPER_API_KEY": "${input:serper-api-key}",
+        "TAVILY_API_KEY": "${input:tavily-api-key}",
+        "GITHUB_TOKEN": "${input:github-token}",
+        "KINDLY_BROWSER_EXECUTABLE_PATH": "${input:browser-path}"
+      }
+    }
+  },
+  "inputs": [
+    { "id": "serper-api-key", "type": "promptString", "description": "Serper API key (optional if using Tavily)" },
+    { "id": "tavily-api-key", "type": "promptString", "description": "Tavily API key (optional if using Serper)" },
+    { "id": "github-token", "type": "promptString", "description": "GitHub token (recommended)" },
+    { "id": "browser-path", "type": "promptString", "description": "Browser binary path (only if needed)" }
+  ]
+}
+```
+
+## Browser path (only if auto-detection fails)
+Set `KINDLY_BROWSER_EXECUTABLE_PATH` to your browser binary.
 
 macOS (Homebrew Chromium):
 ```bash
@@ -213,113 +324,15 @@ Windows (PowerShell):
 $env:KINDLY_BROWSER_EXECUTABLE_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
 ```
 
-### Client configuration (file-based)
-Notes:
-- All examples run the same server command. Use `TAVILY_API_KEY` instead of `SERPER_API_KEY` if you’re using Tavily.
-- `GITHUB_TOKEN` is highly recommended (GitHub Issues/PRs become much more structured/usable).
+## Troubleshooting
 
-#### Codex (alternative: config file)
-Edit `~/.codex/config.toml`:
-```toml
-[mcp_servers.kindly-web-search]
-command = "uvx"
-args = ["--from", "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server", "kindly-web-search-mcp-server", "start-mcp-server"]
-env_vars = ["SERPER_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH"]
-startup_timeout_sec = 60.0
-```
+- “No Chromium-based browser executable found”: install Chrome/Chromium/Edge and set `KINDLY_BROWSER_EXECUTABLE_PATH` if needed.
+- “Failed to connect to browser”: increase retries/timeouts:
+  - `KINDLY_NODRIVER_RETRY_ATTEMPTS=5`
+  - `KINDLY_HTML_TOTAL_TIMEOUT_SECONDS=45`
+- `OSError: [Errno 39] Directory not empty: '/tmp/kindly-nodriver-.../Default'`: update to the latest server revision (uv may cache tool envs; `uv cache clean` can help).
+- “web_search fails: no provider key”: set `SERPER_API_KEY` or `TAVILY_API_KEY`.
 
-#### Claude Code (alternative: `.mcp.json`)
-Create/edit `.mcp.json` (project scope) or `~/.config/claude-code/.mcp.json` (user scope):
-```json
-{
-  "mcpServers": {
-    "kindly-web-search": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server", "kindly-web-search-mcp-server", "start-mcp-server"],
-      "env": { "SERPER_API_KEY": "${SERPER_API_KEY}", "GITHUB_TOKEN": "${GITHUB_TOKEN}", "KINDLY_BROWSER_EXECUTABLE_PATH": "${KINDLY_BROWSER_EXECUTABLE_PATH}" }
-    }
-  }
-}
-```
-
-#### Cursor
-Create `.cursor/mcp.json`:
-```json
-{
-  "mcpServers": {
-    "kindly-web-search": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server", "kindly-web-search-mcp-server", "start-mcp-server"],
-      "env": { "SERPER_API_KEY": "${env:SERPER_API_KEY}", "GITHUB_TOKEN": "${env:GITHUB_TOKEN}", "KINDLY_BROWSER_EXECUTABLE_PATH": "${env:KINDLY_BROWSER_EXECUTABLE_PATH}" }
-    }
-  }
-}
-```
-
-#### Gemini CLI
-Edit `~/.gemini/settings.json` (or `.gemini/settings.json` in a project):
-```json
-{
-  "mcpServers": {
-    "kindly-web-search": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server", "kindly-web-search-mcp-server", "start-mcp-server"],
-      "env": { "SERPER_API_KEY": "$SERPER_API_KEY", "GITHUB_TOKEN": "$GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH": "$KINDLY_BROWSER_EXECUTABLE_PATH" }
-    }
-  }
-}
-```
-
-#### Claude Desktop
-Edit `claude_desktop_config.json`:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\\Claude\\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "kindly-web-search": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server", "kindly-web-search-mcp-server", "start-mcp-server"],
-      "env": { "SERPER_API_KEY": "PASTE_SERPER_OR_USE_TAVILY_API_KEY", "GITHUB_TOKEN": "PASTE_GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH": "PASTE_IF_NEEDED" }
-    }
-  }
-}
-```
-
-#### GitHub Copilot / Microsoft Copilot (VS Code)
-Create `.vscode/mcp.json`:
-```json
-{
-  "servers": {
-    "kindly-web-search": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server", "kindly-web-search-mcp-server", "start-mcp-server"],
-      "env": {
-        "SERPER_API_KEY": "${input:serper-api-key}",
-        "TAVILY_API_KEY": "${input:tavily-api-key}",
-        "GITHUB_TOKEN": "${input:github-token}",
-        "KINDLY_BROWSER_EXECUTABLE_PATH": "${input:browser-path}"
-      }
-    }
-  },
-  "inputs": [
-    { "id": "serper-api-key", "type": "promptString", "description": "Serper API key (leave empty if using Tavily)" },
-    { "id": "tavily-api-key", "type": "promptString", "description": "Tavily API key (leave empty if using Serper)" },
-    { "id": "github-token", "type": "promptString", "description": "GitHub token (recommended)" },
-    { "id": "browser-path", "type": "promptString", "description": "Browser binary path (only if needed)" }
-  ]
-}
-```
-
-### Troubleshooting (common)
-- “No Chromium-based browser executable found”: make sure `chromium` command works. If not, install Chrome/Chromium/Edge and (if needed) set `KINDLY_BROWSER_EXECUTABLE_PATH` to the `chromium` location (check `which chromium`).
-- “web_search fails: no provider key”: set `SERPER_API_KEY` or `TAVILY_API_KEY` in your client config.
-- “GitHub Issues/PRs look unstructured”: set `GITHUB_TOKEN` (read-only, public-only is fine).
-- Some sites block automation: `page_content` may contain a short error note; try `get_content(url)` to see the exact failure.
-
-### Security notes
+## Security
 - Don’t commit API keys.
-- Prefer env-var expansion in config files (when supported) instead of hardcoding secrets.
+- Prefer env-var expansion (Codex `env_vars`, Cursor `${env:...}`, Gemini `$VAR`, Claude Code `${VAR}`) instead of hardcoding secrets.
