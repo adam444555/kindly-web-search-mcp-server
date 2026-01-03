@@ -24,7 +24,7 @@ They're not there. Your AI now has to make a second call to scrape the page. Som
 
 At [Shelpuk AI Technology Consulting](https://shelpuk.com), we build custom AI products under a fixed-price model. Development efficiency isn't just nice to have - it's the foundation of our business. We've been using AI coding assistants since 2023 (GitHub Copilot, Cursor, Windsurf, Claude Code, Codex), and we noticed something frustrating:
 
-**When we developers face a complex bug, we don't just want to find a URL—we want to find the conversation.** We want to see what others tried, what worked, what didn't, and why. We want the GitHub Issue with all the comments. We want the StackOverflow thread with upvoted answers and follow-up discussions. We want the arXiv paper content, not just its abstract.
+**When we developers face a complex bug, we don't just want to find a URL - we want to find the conversation.** We want to see what others tried, what worked, what didn't, and why. We want the GitHub Issue with all the comments. We want the StackOverflow thread with upvoted answers and follow-up discussions. We want the arXiv paper content, not just its abstract.
 
 Existing web search MCP servers are basically wrappers around search APIs. They're great at *finding* content, but terrible at *delivering* it in a way that's useful for AI coding assistants.
 
@@ -32,13 +32,13 @@ Existing web search MCP servers are basically wrappers around search APIs. They'
 
 We built Kindly Web Search because we needed our AI assistants to work the way *we* work. When searching for solutions, Kindly:
 
-- **Integrates directly with APIs** for StackExchange, GitHub Issues, arXiv, and Wikipedia—presenting content in LLM-optimized formats with proper structure
+- **Integrates directly with APIs** for StackExchange, GitHub Issues, arXiv, and Wikipedia - presenting content in LLM-optimized formats with proper structure
 - **Returns the full conversation** in a single call: questions, answers, comments, reactions, and metadata
 - **Parses any webpage in real-time** using a headless browser for cutting-edge issues that were literally posted yesterday
-- **Passes all useful content to the LLM immediately**—no need for a second scraping call
+- **Passes all useful content to the LLM immediately** - no need for a second scraping call
 - **Supports multiple search providers** (Serper and Tavily) with intelligent fallback
 
-The result? When Claude Code or Codex searches for that GPU batch error, it gets the question *and* the answers. The code snippets. The "this fixed it for me" comments. Everything it needs to help you solve the problem—**in one call**.
+Now, when Claude Code or Codex searches for that GPU batch error, it gets the question *and* the answers. The code snippets. The "this fixed it for me" comments. Everything it needs to help you solve the problem - **in one call**.
 
 ## One MCP Server to Rule Them All
 
