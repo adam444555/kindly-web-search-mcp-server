@@ -104,7 +104,11 @@ Windows:
 Linux (Ubuntu/Debian):
 ```bash
 sudo apt-get update
-sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+sudo apt-get install -y chromium-browser
+python -m playwright install chromium
+PW_CHROME="$(find ~/.cache/ms-playwright -type f -executable \( -name chrome -o -name chromium \) | head -n 1)"
+echo "$PW_CHROME"
+# Verify that chromium path exists
 ```
 
 Linux (Fedora):
@@ -148,6 +152,7 @@ macOS / Linux:
 codex mcp add kindly-web-search \
   --env SERPER_API_KEY="$SERPER_API_KEY" \
   --env GITHUB_TOKEN="$GITHUB_TOKEN" \
+  --env KINDLY_BROWSER_EXECUTABLE_PATH=="$PW_CHROME" \
   -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server \
   kindly-web-search-mcp-server start-mcp-server
 ```
@@ -310,7 +315,7 @@ Create `.vscode/mcp.json`:
 ```
 
 ### Troubleshooting (common)
-- “No Chromium-based browser executable found”: install Chrome/Chromium/Edge and (if needed) set `KINDLY_BROWSER_EXECUTABLE_PATH`.
+- “No Chromium-based browser executable found”: make sure `chromium` command works. If not, install Chrome/Chromium/Edge and (if needed) set `KINDLY_BROWSER_EXECUTABLE_PATH` to the `chromium` location (check `which chromium`).
 - “web_search fails: no provider key”: set `SERPER_API_KEY` or `TAVILY_API_KEY` in your client config.
 - “GitHub Issues/PRs look unstructured”: set `GITHUB_TOKEN` (read-only, public-only is fine).
 - Some sites block automation: `page_content` may contain a short error note; try `get_content(url)` to see the exact failure.
