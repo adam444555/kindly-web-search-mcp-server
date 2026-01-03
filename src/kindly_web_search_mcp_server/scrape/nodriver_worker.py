@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import io
 import os
+import shutil
 import sys
 from typing import TextIO
 
@@ -68,6 +69,49 @@ def _suppress_unraisable_exceptions() -> None:
     sys.unraisablehook = filtered  # type: ignore[assignment]
 
 
+def _resolve_browser_executable_path(explicit_path: str | None) -> str | None:
+    if explicit_path and explicit_path.strip():
+        return explicit_path.strip()
+
+    for key in (
+        "KINDLY_BROWSER_EXECUTABLE_PATH",
+        "BROWSER_EXECUTABLE_PATH",
+        "CHROME_BIN",
+        "CHROME_PATH",
+    ):
+        value = (os.environ.get(key) or "").strip()
+        if value:
+            return value
+
+    for name in ("chromium", "google-chrome", "google-chrome-stable", "chrome", "chromium-browser"):
+        resolved = shutil.which(name)
+        if resolved:
+            return resolved
+
+    return None
+
+
+def _resolve_sandbox_enabled() -> bool:
+    """
+    Determine whether Chromium sandbox should be enabled.
+
+    - In containers, the server may run as root; Chromium generally cannot start with sandbox as root.
+    - Default is sandbox disabled to improve headless reliability in WSL/Docker.
+    """
+    try:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            return False
+    except Exception:
+        pass
+
+    raw_sandbox = (os.environ.get("KINDLY_NODRIVER_SANDBOX") or "").strip().lower()
+    if raw_sandbox in ("0", "false", "no", "off"):
+        return False
+    if raw_sandbox in ("1", "true", "yes", "on"):
+        return True
+    return False
+
+
 async def _fetch_html(
     url: str,
     *,
@@ -86,20 +130,18 @@ async def _fetch_html(
     browser = None
     page = None
     ref_page = None
-    sandbox_enabled = True
-    raw_sandbox = (os.environ.get("KINDLY_NODRIVER_SANDBOX") or "").strip().lower()
-    if raw_sandbox in ("0", "false", "no", "off"):
-        sandbox_enabled = False
-    elif raw_sandbox in ("1", "true", "yes", "on"):
-        sandbox_enabled = True
-    else:
-        # Default: disable sandbox for headless automation to work reliably in WSL/Docker.
-        sandbox_enabled = False
+    sandbox_enabled = _resolve_sandbox_enabled()
+    resolved_browser_executable_path = _resolve_browser_executable_path(browser_executable_path)
+    if resolved_browser_executable_path is None:
+        raise RuntimeError(
+            "No Chromium-based browser executable found. "
+            "Install Chromium/Chrome or set KINDLY_BROWSER_EXECUTABLE_PATH to the browser binary path."
+        )
 
     try:
         browser = await uc.start(
             headless=True,
-            browser_executable_path=browser_executable_path,
+            browser_executable_path=resolved_browser_executable_path,
             sandbox=sandbox_enabled,
             browser_args=[
                 "--window-size=1920,1080",
@@ -133,6 +175,21 @@ async def _fetch_html(
         if isinstance(content, (bytes, bytearray)):
             return bytes(content).decode("utf-8", errors="ignore")
         return str(content or "")
+    except Exception as exc:
+        msg = str(exc)
+        if "Failed to connect to browser" in msg:
+            is_root = False
+            try:
+                is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+            except Exception:
+                is_root = False
+            raise RuntimeError(
+                "Failed to connect to browser. "
+                f"(root={is_root}, sandbox={sandbox_enabled}, browser_executable_path={resolved_browser_executable_path!r}) "
+                "If running as root (e.g., in Docker), ensure sandbox is disabled (KINDLY_NODRIVER_SANDBOX=0). "
+                "If the browser cannot be found/started, set KINDLY_BROWSER_EXECUTABLE_PATH."
+            ) from exc
+        raise
     finally:
         # Best-effort cleanup. Errors here should not mask the page retrieval.
         try:
