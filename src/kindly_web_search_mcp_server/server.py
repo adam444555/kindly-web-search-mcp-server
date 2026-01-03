@@ -19,8 +19,8 @@ LOGGER = logging.getLogger(__name__)
 mcp = FastMCP(
     "kindly-web-search",
     instructions=(
-        "Web search via Serper with optional scraping/extraction of result pages "
-        "into Markdown for LLM consumption."
+        "Web search via Serper (default) or Tavily (fallback) with best-effort "
+        "scraping/extraction of result pages into Markdown for LLM consumption."
     ),
 )
 
@@ -157,21 +157,18 @@ def main(argv: list[str] | None = None) -> None:
 async def web_search(
     query: str,
     num_results: int = 3,
-    return_full_pages: bool = True,
 ) -> dict:
-    """Search the web and optionally return result pages as Markdown.
+    """Search the web and return result pages as Markdown.
 
     This tool is intended to:\n
     1) query Serper (Google search API)\n
     2) return top results with `title`, `link`, `snippet`\n
-    3) when requested, fetch each `link`, extract main content, and return it as
+    3) fetch each `link`, extract main content, and return it as
        `page_content` Markdown.\n
 
     Parameters
     - `query`: the search query string.
     - `num_results`: number of top search results to return (default: 3).
-    - `return_full_pages`: when true, also include `page_content` Markdown for each
-      result (default: true).
 
     Notes
     - Page content resolution is best-effort:
@@ -181,12 +178,17 @@ async def web_search(
 
     results = await search_web(query, num_results=num_results)
 
-    if return_full_pages:
-        enriched = []
-        for r in results:
-            page_md = await resolve_page_content_markdown(r.link)
-            enriched.append(r.model_copy(update={"page_content": page_md}))
-        results = enriched
+    enriched = []
+    for r in results:
+        page_md = await resolve_page_content_markdown(r.link)
+        if page_md is None:
+            # The universal loader intentionally skips obvious PDFs; return a deterministic note.
+            page_md = (
+                "_Could not retrieve content for this URL (possibly a PDF or unsupported type)._"
+                f"\n\nSource: {r.link}\n"
+            )
+        enriched.append(r.model_copy(update={"page_content": page_md}))
+    results = enriched
 
     return WebSearchResponse(results=results).model_dump()
 
@@ -195,7 +197,7 @@ async def web_search(
 async def get_content(url: str) -> dict:
     """Fetch a single URL and return its content as Markdown (best-effort).
 
-    This tool reuses the same content resolution pipeline as `web_search(return_full_pages=true)`:
+    This tool reuses the same content resolution pipeline as `web_search(...)`:
     - Specialized API loaders when available (e.g., StackExchange, GitHub Issues, Wikipedia, arXiv).
     - Universal HTML loader fallback for other web pages.
 

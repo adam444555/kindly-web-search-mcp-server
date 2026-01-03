@@ -15,15 +15,19 @@ class TestWebSearchTool(unittest.IsolatedAsyncioTestCase):
         from kindly_web_search_mcp_server.server import web_search
 
         mocked_results = [
-            WebSearchResult(title="T", link="https://example.com", snippet="S", page_content=None)
+            WebSearchResult(title="T", link="https://example.com", snippet="S", page_content="")
         ]
 
         with patch(
             "kindly_web_search_mcp_server.server.search_web", new_callable=AsyncMock
-        ) as mock_search:
+        ) as mock_search, patch(
+            "kindly_web_search_mcp_server.server.resolve_page_content_markdown",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
             mock_search.return_value = mocked_results
+            mock_resolve.return_value = "# Title\n\nHello"
 
-            out = await web_search("hello", num_results=1, return_full_pages=False)
+            out = await web_search("hello", num_results=1)
 
         self.assertIsInstance(out, dict)
         self.assertIn("results", out)
@@ -31,7 +35,8 @@ class TestWebSearchTool(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["results"][0]["title"], "T")
         self.assertEqual(out["results"][0]["link"], "https://example.com")
         self.assertEqual(out["results"][0]["snippet"], "S")
-        self.assertIsNone(out["results"][0].get("page_content"))
+        self.assertIn("page_content", out["results"][0])
+        self.assertIn("Hello", out["results"][0]["page_content"])
 
     async def test_get_content_returns_markdown(self) -> None:
         from kindly_web_search_mcp_server.server import get_content

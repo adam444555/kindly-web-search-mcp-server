@@ -27,6 +27,9 @@ def _should_fallback(exc: BaseException) -> bool:
     # Explicitly do not fallback on auth/config issues.
     if isinstance(exc, (SerperConfigError, TavilyConfigError)):
         return False
+    # Provider-level errors (malformed/unexpected JSON, etc.) are fallback candidates.
+    if isinstance(exc, (SerperError, TavilyError)):
+        return True
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in (401, 403, 400):

@@ -135,9 +135,9 @@ def _is_snap_browser(executable_path: str) -> bool:
 def _resolve_start_retry_attempts() -> int:
     raw = (os.environ.get("KINDLY_NODRIVER_RETRY_ATTEMPTS") or "").strip()
     try:
-        value = int(raw) if raw else 2
+        value = int(raw) if raw else 3
     except ValueError:
-        value = 2
+        value = 3
     return max(1, min(value, 5))
 
 

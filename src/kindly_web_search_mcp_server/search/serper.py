@@ -81,7 +81,8 @@ async def search_serper(
         if not isinstance(title, str) or not isinstance(link, str) or not isinstance(snippet, str):
             continue
 
-        results.append(WebSearchResult(title=title, link=link, snippet=snippet, page_content=None))
+        # `page_content` is populated later by the MCP tool (best-effort).
+        results.append(WebSearchResult(title=title, link=link, snippet=snippet, page_content=""))
         if len(results) >= num_results:
             break
 
