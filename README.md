@@ -124,12 +124,12 @@ uv run -m kindly_web_search_mcp_server --http --host 127.0.0.1 --port 8000
 ### Option C: `uvx` (run from Git, no local install)
 If you use `uvx`, you can run the server from a Git URL in a temporary isolated environment:
 ```bash
-uvx --from git+https://github.com/<ORG>/<REPO> kindly-web-search-mcp-server start-mcp-server --context codex
+uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server kindly-web-search-mcp-server start-mcp-server --context codex
 ```
 
 You can pin to a branch/tag/commit:
 ```bash
-uvx --from git+https://github.com/<ORG>/<REPO>@v0.0.1 kindly-web-search-mcp-server start-mcp-server --context codex
+uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server@v0.0.1 kindly-web-search-mcp-server start-mcp-server --context codex
 ```
 
 ### Environment variables
@@ -267,7 +267,7 @@ codex mcp add kindly-web-search \
   --env SERPER_API_KEY="$SERPER_API_KEY" \
   --env GITHUB_TOKEN="$GITHUB_TOKEN" \
   --env KINDLY_BROWSER_EXECUTABLE_PATH="$KINDLY_BROWSER_EXECUTABLE_PATH" \
-  -- uvx --from git+https://github.com/<ORG>/<REPO> \
+  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server \
     kindly-web-search-mcp-server start-mcp-server --context codex
 ```
 
@@ -277,7 +277,7 @@ Manual config (`~/.codex/config.toml`):
 command = "uvx"
 args = [
   "--from",
-  "git+https://github.com/<ORG>/<REPO>",
+  "git+https://github.com/Shelpuk-AI-Technology-Consulting/kindly-web-search-mcp-server",
   "kindly-web-search-mcp-server",
   "start-mcp-server",
   "--context",
