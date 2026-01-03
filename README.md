@@ -121,6 +121,17 @@ uv run -m kindly_web_search_mcp_server --stdio
 uv run -m kindly_web_search_mcp_server --http --host 127.0.0.1 --port 8000
 ```
 
+### Option C: `uvx` (run from Git, no local install)
+If you use `uvx`, you can run the server from a Git URL in a temporary isolated environment:
+```bash
+uvx --from git+https://github.com/<ORG>/<REPO> kindly-web-search-mcp-server start-mcp-server --context codex
+```
+
+You can pin to a branch/tag/commit:
+```bash
+uvx --from git+https://github.com/<ORG>/<REPO>@v0.0.1 kindly-web-search-mcp-server start-mcp-server --context codex
+```
+
 ### Environment variables
 This server expects environment variables to be set by your runtime (IDE, shell, CI, container).
 
@@ -134,6 +145,7 @@ An entrypoint is provided via `pyproject.toml`:
 - `mcp-server` → `kindly_web_search_mcp_server.server:main`
 - `mcp-web-search` → `kindly_web_search_mcp_server.server:main` (recommended; less likely to conflict)
 - `kindly-web-search` → `kindly_web_search_mcp_server.server:main` (alias)
+- `kindly-web-search-mcp-server` → `kindly_web_search_mcp_server.cli:main` (uvx-friendly wrapper)
 
 Note: `--stdio` is meant to be launched by an MCP client. If you run it directly in a terminal and press Enter, the
 server will try to parse your input as JSON-RPC and log errors. For interactive/manual runs, prefer `--http`.
@@ -209,6 +221,9 @@ Project config (`.mcp.json` in repo root):
 
 ### Codex (CLI / IDE extension)
 
+Codex can run this server either from a local virtualenv (traditional install) or directly from Git via `uvx`.
+
+#### Option A: virtualenv install
 Prereq (WSL/Linux): install into a virtualenv so the executable exists.
 
 If you used `uv`, it will typically create `.venv/` automatically; in that case the executable will be at:
@@ -226,6 +241,7 @@ CLI install (stdio):
 codex mcp add kindly-web-search \
   --env SERPER_API_KEY="$SERPER_API_KEY" \
   --env GITHUB_TOKEN="$GITHUB_TOKEN" \
+  --env KINDLY_BROWSER_EXECUTABLE_PATH="$KINDLY_BROWSER_EXECUTABLE_PATH" \
   -- "$(pwd)/.venv/bin/mcp-web-search" --stdio
 
 # If you used `.venv-codex/` instead of `.venv/`, use:
@@ -241,6 +257,39 @@ args = ["--stdio"]
 # Prefer keeping secrets out of config files:
 env_vars = ["SERPER_API_KEY", "GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH"]
 ```
+
+#### Option B: `uvx` from Git (no local install)
+This pattern matches how Serena is commonly configured for Codex: `uvx --from git+... <tool> start-mcp-server --context codex`.
+
+CLI install (stdio):
+```bash
+codex mcp add kindly-web-search \
+  --env SERPER_API_KEY="$SERPER_API_KEY" \
+  --env GITHUB_TOKEN="$GITHUB_TOKEN" \
+  --env KINDLY_BROWSER_EXECUTABLE_PATH="$KINDLY_BROWSER_EXECUTABLE_PATH" \
+  -- uvx --from git+https://github.com/<ORG>/<REPO> \
+    kindly-web-search-mcp-server start-mcp-server --context codex
+```
+
+Manual config (`~/.codex/config.toml`):
+```toml
+[mcp_servers.kindly-web-search]
+command = "uvx"
+args = [
+  "--from",
+  "git+https://github.com/<ORG>/<REPO>",
+  "kindly-web-search-mcp-server",
+  "start-mcp-server",
+  "--context",
+  "codex"
+]
+startup_timeout_sec = 60.0
+
+# Prefer keeping secrets out of config files:
+env_vars = ["SERPER_API_KEY", "GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH"]
+```
+
+Note: `--context` is currently a compatibility hint; the wrapper exports it as `KINDLY_MCP_CONTEXT` for potential future behavior toggles.
 
 ### Gemini CLI
 

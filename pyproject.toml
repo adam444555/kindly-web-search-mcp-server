@@ -27,3 +27,4 @@ dev = ["pytest", "ruff"]
 mcp-server = "kindly_web_search_mcp_server.server:main"
 mcp-web-search = "kindly_web_search_mcp_server.server:main"
 kindly-web-search = "kindly_web_search_mcp_server.server:main"
+kindly-web-search-mcp-server = "kindly_web_search_mcp_server.cli:main"
