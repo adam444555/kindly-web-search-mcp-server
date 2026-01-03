@@ -166,11 +166,23 @@ args = [
 ]
 # Forward variables from your shell/OS environment:
 env_vars = ["SERPER_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN", "KINDLY_BROWSER_EXECUTABLE_PATH"]
-startup_timeout_sec = 60.0
+startup_timeout_sec = 120.0
 ```
 
 ### Claude Code
 Set either `SERPER_API_KEY` or `TAVILY_API_KEY` (you can omit the other).
+If Claude Code times out while starting the server, set a 120s startup timeout (milliseconds):
+
+macOS / Linux:
+```bash
+export MCP_TIMEOUT=120000
+```
+
+Windows (PowerShell):
+```powershell
+$env:MCP_TIMEOUT="120000"
+```
+
 Create/edit `.mcp.json` (project scope) or `~/.config/claude-code/.mcp.json` (user scope):
 ```json
 {
@@ -213,7 +225,8 @@ Edit `~/.gemini/settings.json` (or `.gemini/settings.json` in a project):
         "TAVILY_API_KEY": "$TAVILY_API_KEY",
         "GITHUB_TOKEN": "$GITHUB_TOKEN",
         "KINDLY_BROWSER_EXECUTABLE_PATH": "$KINDLY_BROWSER_EXECUTABLE_PATH"
-      }
+      },
+      "timeout": 120000
     }
   }
 }
@@ -221,6 +234,7 @@ Edit `~/.gemini/settings.json` (or `.gemini/settings.json` in a project):
 
 ### Cursor
 Set either `SERPER_API_KEY` or `TAVILY_API_KEY` (you can omit the other).
+Startup timeout: Cursor does not currently expose a per-server startup timeout setting. If the first run is slow, run the `uvx` command from Quickstart once in a terminal to prebuild the tool environment, then restart Cursor.
 Create `.cursor/mcp.json`:
 ```json
 {
@@ -251,6 +265,7 @@ Edit `claude_desktop_config.json`:
 - Windows: `%APPDATA%\\Claude\\claude_desktop_config.json`
 
 Note: values in this file are literal strings. Don’t commit this file or share it.
+Startup timeout: Claude Desktop does not expose a per-server startup timeout setting. If the first run is slow, run the `uvx` command from Quickstart once in a terminal to prebuild the tool environment, then restart Claude Desktop.
 
 ```json
 {
@@ -276,6 +291,7 @@ Note: values in this file are literal strings. Don’t commit this file or share
 
 ### GitHub Copilot / Microsoft Copilot (VS Code)
 Most secure option: uses interactive prompts, so secrets don’t need to be stored in the file.
+Startup timeout: VS Code currently does not expose a per-server startup timeout setting for MCP servers. If the first run is slow, run the `uvx` command from Quickstart once in a terminal to prebuild the tool environment, then restart VS Code.
 Create `.vscode/mcp.json`:
 ```json
 {
