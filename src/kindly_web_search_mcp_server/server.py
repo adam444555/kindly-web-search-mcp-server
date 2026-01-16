@@ -179,9 +179,17 @@ def _get_float_env(key: str, default: float) -> float:
 
 
 def _resolve_tool_total_timeout_seconds() -> float:
-    # Keep a safety buffer below common 60s tool-call deadlines.
-    value = _get_float_env("KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS", 55.0)
-    return max(1.0, min(value, 55.0))
+    """
+    Resolve the total per-tool time budget (seconds).
+
+    Historically this was clamped to <=55s to stay below common 60s tool-call limits.
+    In practice, Windows headless-browser cold starts can exceed that, so we allow a
+    higher cap that can be tuned via environment variables.
+    """
+    value = _get_float_env("KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS", 120.0)
+    max_value = _get_float_env("KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS", 600.0)
+    safe_max = max(1.0, max_value)
+    return max(1.0, min(value, safe_max))
 
 
 def _resolve_web_search_max_concurrency(num_results: int) -> int:
@@ -234,7 +242,7 @@ async def web_search(
     - If the search provider fails (missing key, quota/rate-limit, network issues), the tool will error.
     - For a deeper look at one result, call `get_content()` on the chosen `link`.
     - This tool is often called under a hard per-call deadline; page_content resolution is bounded by
-      `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS` (default 55, clamped 1..55) and concurrency is capped by
+      `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS` (default 120, clamped 1..KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS) and concurrency is capped by
       `KINDLY_WEB_SEARCH_MAX_CONCURRENCY` (default 3, clamped 1..5).
     """
 
@@ -308,7 +316,7 @@ async def get_content(url: str) -> dict:
     - Some content types (including many PDFs) may be unsupported.
     - Content extraction is best-effort and may be truncated.
     - This tool is often called under a hard per-call deadline; resolution is bounded by
-      `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS` (default 55, clamped 1..55).
+      `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS` (default 120, clamped 1..KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS).
     """
 
     timeout_seconds = _resolve_tool_total_timeout_seconds()

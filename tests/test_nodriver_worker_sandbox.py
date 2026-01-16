@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -124,6 +125,8 @@ class TestNodriverWorkerSandbox(unittest.IsolatedAsyncioTestCase):
         with patch.dict("sys.modules", {"nodriver": type("X", (), {"start": fake_start})}), patch.dict(
             "os.environ", {}, clear=False
         ), patch(
+            "shutil.which", return_value="/usr/bin/chromium"
+        ), patch(
             "kindly_web_search_mcp_server.scrape.nodriver_worker._pick_free_port", return_value=9222
         ), patch(
             "kindly_web_search_mcp_server.scrape.nodriver_worker._launch_chromium", AsyncMock()
@@ -169,6 +172,8 @@ class TestNodriverWorkerSandbox(unittest.IsolatedAsyncioTestCase):
         with patch.dict("sys.modules", {"nodriver": type("X", (), {"start": fake_start})}), patch.dict(
             "os.environ", {"KINDLY_NODRIVER_SANDBOX": "1"}, clear=False
         ), patch(
+            "shutil.which", return_value="/usr/bin/chromium"
+        ), patch(
             "kindly_web_search_mcp_server.scrape.nodriver_worker._pick_free_port", return_value=9222
         ), patch(
             "kindly_web_search_mcp_server.scrape.nodriver_worker._launch_chromium", AsyncMock()
@@ -191,6 +196,9 @@ class TestNodriverWorkerSandbox(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(kwargs["sandbox"])
 
     async def test_forces_sandbox_off_when_running_as_root(self) -> None:
+        if os.name == "nt":
+            self.skipTest("os.geteuid is not available on Windows")
+
         from kindly_web_search_mcp_server.scrape.nodriver_worker import _fetch_html
 
         class _FakePage:

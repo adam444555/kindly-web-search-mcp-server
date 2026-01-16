@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 import unittest
 import asyncio
@@ -12,6 +13,56 @@ from kindly_web_search_mcp_server.models import WebSearchResult
 
 
 class TestWebSearchTool(unittest.IsolatedAsyncioTestCase):
+    def test_tool_timeout_budget_can_exceed_55_seconds(self) -> None:
+        from kindly_web_search_mcp_server.server import _resolve_tool_total_timeout_seconds
+
+        with patch.dict(
+            os.environ,
+            {
+                "KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS": "120",
+                "KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS": "600",
+            },
+            clear=False,
+        ):
+            self.assertEqual(_resolve_tool_total_timeout_seconds(), 120.0)
+
+        with patch.dict(
+            os.environ,
+            {
+                "KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS": "120",
+                "KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS": "100",
+            },
+            clear=False,
+        ):
+            self.assertEqual(_resolve_tool_total_timeout_seconds(), 100.0)
+
+        with patch.dict(
+            os.environ,
+            {"KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS": "abc"},
+            clear=False,
+        ):
+            self.assertEqual(_resolve_tool_total_timeout_seconds(), 120.0)
+
+        with patch.dict(
+            os.environ,
+            {"KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS": "abc"},
+            clear=False,
+        ):
+            self.assertEqual(_resolve_tool_total_timeout_seconds(), 120.0)
+
+        with patch.dict(
+            os.environ,
+            {"KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS": "90"},
+            clear=False,
+        ):
+            self.assertEqual(_resolve_tool_total_timeout_seconds(), 90.0)
+
+    def test_tool_timeout_defaults_to_55_seconds(self) -> None:
+        from kindly_web_search_mcp_server.server import _resolve_tool_total_timeout_seconds
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_resolve_tool_total_timeout_seconds(), 120.0)
+
     async def test_web_search_returns_results(self) -> None:
         from kindly_web_search_mcp_server.server import web_search
 

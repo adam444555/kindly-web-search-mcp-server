@@ -511,6 +511,16 @@ docker run --rm -p 8000:8000 \
   - `KINDLY_NODRIVER_DEVTOOLS_READY_TIMEOUT_SECONDS=20`
   - Ensure proxy/VPN env vars don’t hijack localhost (set `NO_PROXY=localhost,127.0.0.1` if you use `HTTP_PROXY`/`HTTPS_PROXY`)
   - `KINDLY_HTML_TOTAL_TIMEOUT_SECONDS=45`
+- `page_content` shows `_Failed to retrieve page content: TimeoutError_` (can happen on **Windows**): the MCP tool time budget was exceeded (often due to slower headless browser cold starts on Windows).
+  - How to spot it: one or more results include `_Failed to retrieve page content: TimeoutError_` in `page_content` (or `get_content(url)` returns that message).
+  - Fix: increase `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS` (and, if needed, raise the cap `KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS`).
+  - Env vars:
+    - `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS`: total time budget per `web_search` / `get_content` call (search + extraction). Default: `120`.
+    - `KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS`: caps the above value (safety). Default: `600`.
+  - Recommended starting point (PowerShell):
+    - `$env:KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS="180"`
+    - `$env:KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS="600"`
+    - Optional (reduces parallel browser work): `$env:KINDLY_WEB_SEARCH_MAX_CONCURRENCY="1"`
 - `OSError: [Errno 39] Directory not empty: '/tmp/kindly-nodriver-.../Default'`: update to the latest server revision (uv may cache tool envs; `uv cache clean` can help).
 - “web_search fails: no provider key”: set `SERPER_API_KEY`, `TAVILY_API_KEY`, or `SEARXNG_BASE_URL`.
 
