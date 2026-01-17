@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from .extract import extract_content_as_markdown
@@ -113,6 +116,34 @@ def _ensure_no_proxy_localhost_env(env: dict[str, str]) -> None:
                 merged.append(host)
         if merged:
             env[key] = ",".join(merged)
+
+
+def _split_worker_diagnostics(
+    stderr_text: str,
+) -> tuple[list[dict[str, Any]], str, list[str]]:
+    entries: list[dict[str, Any]] = []
+    cleaned_lines: list[str] = []
+    error_samples: list[str] = []
+    for line in (stderr_text or "").splitlines():
+        if not line.startswith("KINDLY_DIAG "):
+            cleaned_lines.append(line)
+            continue
+        payload = line[len("KINDLY_DIAG ") :].strip()
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            if len(error_samples) < 3:
+                sample, _, _ = truncate_text(payload, 200)
+                error_samples.append(sample)
+            continue
+        if isinstance(parsed, dict):
+            entries.append(parsed)
+        else:
+            if len(error_samples) < 3:
+                sample, _, _ = truncate_text(payload, 200)
+                error_samples.append(sample)
+    cleaned_text = "\n".join(cleaned_lines).strip()
+    return entries, cleaned_text, error_samples
 
 
 async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
@@ -225,6 +256,7 @@ async def fetch_html_via_nodriver(
             },
         )
 
+    started = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -234,21 +266,72 @@ async def fetch_html_via_nodriver(
 
     try:
         raw_timeout = (os.environ.get("KINDLY_HTML_TOTAL_TIMEOUT_SECONDS") or "").strip()
+        used_default = False
+        invalid = False
+        parsed_value = config.total_timeout_seconds
         try:
-            timeout_seconds = float(raw_timeout) if raw_timeout else config.total_timeout_seconds
+            if raw_timeout:
+                parsed_value = float(raw_timeout)
+            else:
+                used_default = True
         except ValueError:
-            timeout_seconds = config.total_timeout_seconds
-        timeout_seconds = max(1.0, min(timeout_seconds, 300.0))
+            used_default = True
+            invalid = True
+        if parsed_value <= 0:
+            used_default = True
+            invalid = True
+            parsed_value = config.total_timeout_seconds
+        clamped = False
+        timeout_seconds = max(1.0, min(parsed_value, 600.0))
+        clamped = timeout_seconds != parsed_value
+        if diagnostics:
+            diagnostics.emit(
+                "worker.timeout_budget_parent",
+                "Resolved worker timeout budget",
+                {
+                    "raw_value": raw_timeout,
+                    "clamped_value": timeout_seconds,
+                    "effective_timeout_seconds": timeout_seconds,
+                    "clamped": clamped,
+                    "used_default": used_default,
+                    "invalid": invalid,
+                    "default_seconds": config.total_timeout_seconds,
+                },
+            )
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(), timeout=timeout_seconds
         )
     except asyncio.TimeoutError:
         await _terminate_process_tree(proc)
+        stderr_text = ""
+        try:
+            _, stderr_tail = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+            stderr_text = (stderr_tail or b"").decode("utf-8", errors="ignore").strip()
+        except Exception:
+            stderr_text = ""
+        worker_entries, stderr_text, error_samples = _split_worker_diagnostics(stderr_text)
+        if diagnostics and worker_entries:
+            diagnostics.entries.extend(worker_entries)
+        if diagnostics and error_samples:
+            diagnostics.emit(
+                "worker.diag_parse_error",
+                "Failed to parse worker diagnostics",
+                {"samples": error_samples},
+            )
         if diagnostics:
+            stderr_sample, stderr_truncated, stderr_len = truncate_text(
+                stderr_text, MAX_STDERR_CHARS
+            )
             diagnostics.emit(
                 "worker.timeout",
                 "Nodriver worker timed out",
-                {"timeout_seconds": timeout_seconds},
+                {
+                    "timeout_seconds": timeout_seconds,
+                    "runtime_ms": int((time.monotonic() - started) * 1000),
+                    "stderr_len": stderr_len,
+                    "stderr_sample": stderr_sample,
+                    "stderr_truncated": stderr_truncated,
+                },
             )
         raise
     except asyncio.CancelledError:
@@ -257,8 +340,19 @@ async def fetch_html_via_nodriver(
             diagnostics.emit("worker.cancelled", "Nodriver worker cancelled", {})
         raise
 
+    stderr_text = (stderr or b"").decode("utf-8", errors="ignore").strip()
+    worker_entries, stderr_text, error_samples = _split_worker_diagnostics(stderr_text)
+    if diagnostics and worker_entries:
+        diagnostics.entries.extend(worker_entries)
+    if diagnostics and error_samples:
+        diagnostics.emit(
+            "worker.diag_parse_error",
+            "Failed to parse worker diagnostics",
+            {"samples": error_samples},
+        )
+
     if proc.returncode != 0:
-        detail = (stderr or b"").decode("utf-8", errors="ignore").strip()
+        detail = stderr_text
         if diagnostics:
             stderr_sample, stderr_truncated, stderr_len = truncate_text(
                 detail, MAX_STDERR_CHARS
@@ -271,6 +365,7 @@ async def fetch_html_via_nodriver(
                     "stderr_len": stderr_len,
                     "stderr_sample": stderr_sample,
                     "stderr_truncated": stderr_truncated,
+                    "runtime_ms": int((time.monotonic() - started) * 1000),
                 },
             )
         raise RuntimeError(
@@ -278,7 +373,6 @@ async def fetch_html_via_nodriver(
         )
 
     if diagnostics:
-        stderr_text = (stderr or b"").decode("utf-8", errors="ignore").strip()
         if stderr_text:
             stderr_sample, stderr_truncated, stderr_len = truncate_text(
                 stderr_text, MAX_STDERR_CHARS
@@ -290,8 +384,17 @@ async def fetch_html_via_nodriver(
                     "stderr_len": stderr_len,
                     "stderr_sample": stderr_sample,
                     "stderr_truncated": stderr_truncated,
+                    "runtime_ms": int((time.monotonic() - started) * 1000),
                 },
             )
+        diagnostics.emit(
+            "worker.stdout",
+            "Nodriver worker completed",
+            {
+                "stdout_len": len(stdout or b""),
+                "runtime_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
 
     return (stdout or b"").decode("utf-8", errors="ignore")
 

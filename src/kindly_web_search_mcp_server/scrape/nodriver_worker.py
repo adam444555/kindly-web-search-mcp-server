@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import platform
 import re
 import shutil
 import signal
@@ -388,15 +389,34 @@ def _resolve_devtools_ready_timeout_seconds() -> float:
 
 
 def _resolve_worker_timeout_seconds() -> float:
+    effective, _, _, _, _, _, _ = _resolve_worker_timeout_details()
+    return effective
+
+
+def _resolve_worker_timeout_details() -> tuple[float, float, float, bool, bool, bool, str]:
     raw = (os.environ.get("KINDLY_HTML_TOTAL_TIMEOUT_SECONDS") or "").strip()
+    used_default = False
+    invalid = False
     try:
-        value = float(raw) if raw else 60.0
+        if raw:
+            value = float(raw)
+        else:
+            value = 60.0
+            used_default = True
     except ValueError:
         value = 60.0
-    value = max(1.0, min(value, 300.0))
+        invalid = True
+        used_default = True
+    if value <= 0:
+        value = 60.0
+        invalid = True
+        used_default = True
+    clamped_value = max(1.0, min(value, 600.0))
+    clamped = clamped_value != value
     # Leave a grace window for parent-side cleanup on Windows.
-    grace = min(10.0, max(5.0, value * 0.2))
-    return max(1.0, value - grace)
+    grace = min(10.0, max(5.0, clamped_value * 0.2))
+    effective = max(1.0, clamped_value - grace)
+    return effective, clamped_value, grace, clamped, used_default, invalid, raw
 
 
 def _split_no_proxy_value(raw: str) -> list[str]:
@@ -647,6 +667,11 @@ async def _fetch_html(
         "--disable-renderer-backgrounding",
         f"--user-agent={user_agent}",
     ]
+    _emit_diag(
+        "worker.browser_args",
+        "Resolved Chromium args",
+        {"args": base_browser_args},
+    )
 
     # Chromium may still be flushing profile writes briefly after `browser.stop()`.
     # Never fail the request because a temp profile directory couldn't be deleted.
@@ -670,7 +695,26 @@ async def _fetch_html(
                         port=port,
                         sandbox_enabled=sandbox_enabled,
                     )
+                    _emit_diag(
+                        "worker.launch_args",
+                        "Chromium launch args",
+                        {
+                            "attempt": attempt + 1,
+                            "user_data_dir": user_data_dir,
+                            "args": chromium_args,
+                        },
+                    )
                     chrome_proc = await _launch_chromium(resolved_browser_executable_path, chromium_args)
+                    devtools_started = time.monotonic()
+                    _emit_diag(
+                        "worker.devtools_wait_start",
+                        "Waiting for DevTools endpoint",
+                        {
+                            "host": host,
+                            "port": port,
+                            "timeout_seconds": devtools_ready_timeout_seconds,
+                        },
+                    )
                     await _wait_for_devtools_ready(
                         host=host,
                         port=port,
@@ -680,7 +724,11 @@ async def _fetch_html(
                     _emit_diag(
                         "worker.devtools_ready",
                         "DevTools endpoint ready",
-                        {"host": host, "port": port},
+                        {
+                            "host": host,
+                            "port": port,
+                            "wait_ms": int((time.monotonic() - devtools_started) * 1000),
+                        },
                     )
 
                     # Connect Nodriver to the already-running browser instance (do not spawn another).
@@ -722,6 +770,11 @@ async def _fetch_html(
 
             async def _navigate_and_extract() -> str:
                 nonlocal page, ref_page
+                _emit_diag(
+                    "worker.navigate_start",
+                    "Starting navigation",
+                    {"url": url, "referer": referer or "", "wait_seconds": wait_seconds},
+                )
                 if referer:
                     ref_page = await browser.get(referer)
                     await asyncio.sleep(0.25)
@@ -731,11 +784,21 @@ async def _fetch_html(
 
                 getter = getattr(page, "get_content", None)
                 if callable(getter):
+                    _emit_diag(
+                        "worker.content_method",
+                        "Using get_content()",
+                        {"method": "get_content"},
+                    )
                     content = getter()
                     if asyncio.iscoroutine(content):
                         content = await content
                 else:
                     getter = getattr(page, "content", None)
+                    _emit_diag(
+                        "worker.content_method",
+                        "Using content()",
+                        {"method": "content"},
+                    )
                     content = getter()
                     if asyncio.iscoroutine(content):
                         content = await content
@@ -744,16 +807,35 @@ async def _fetch_html(
             remaining = overall_timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise TimeoutError("Navigation timed out before start")
+            _emit_diag(
+                "worker.timeout_remaining",
+                "Remaining navigation budget",
+                {
+                    "remaining_seconds": remaining,
+                    "overall_timeout_seconds": overall_timeout_seconds,
+                },
+            )
             try:
                 content = await asyncio.wait_for(_navigate_and_extract(), timeout=remaining)
             except asyncio.TimeoutError as exc:
+                _emit_diag(
+                    "worker.navigate_timeout",
+                    "Navigation timed out",
+                    {
+                        "overall_timeout_seconds": overall_timeout_seconds,
+                        "elapsed_seconds": time.monotonic() - started,
+                    },
+                )
                 raise TimeoutError(
                     f"Navigation timed out after {overall_timeout_seconds:.1f}s"
                 ) from exc
             _emit_diag(
                 "worker.navigate_complete",
                 "Navigation complete",
-                {"content_len": len(content) if isinstance(content, str) else 0},
+                {
+                    "content_len": len(content) if isinstance(content, str) else 0,
+                    "elapsed_seconds": time.monotonic() - started,
+                },
             )
 
             if isinstance(content, (bytes, bytearray)):
@@ -828,12 +910,62 @@ async def _main_async(args: argparse.Namespace) -> int:
                 "user_agent": args.user_agent,
                 "wait_seconds": args.wait_seconds,
                 "browser_executable_path": args.browser_executable_path or "",
+                "pid": os.getpid(),
+                "ppid": os.getppid(),
+                "cwd": os.getcwd(),
+                "executable": sys.executable,
+                "python_version": platform.python_version(),
+                "platform": platform.platform(),
+                "env": {
+                    "KINDLY_HTML_TOTAL_TIMEOUT_SECONDS": os.environ.get(
+                        "KINDLY_HTML_TOTAL_TIMEOUT_SECONDS", ""
+                    ),
+                    "KINDLY_NODRIVER_RETRY_ATTEMPTS": os.environ.get(
+                        "KINDLY_NODRIVER_RETRY_ATTEMPTS", ""
+                    ),
+                    "KINDLY_NODRIVER_RETRY_BACKOFF_SECONDS": os.environ.get(
+                        "KINDLY_NODRIVER_RETRY_BACKOFF_SECONDS", ""
+                    ),
+                    "KINDLY_NODRIVER_DEVTOOLS_READY_TIMEOUT_SECONDS": os.environ.get(
+                        "KINDLY_NODRIVER_DEVTOOLS_READY_TIMEOUT_SECONDS", ""
+                    ),
+                    "KINDLY_NODRIVER_SNAP_BACKOFF_MULTIPLIER": os.environ.get(
+                        "KINDLY_NODRIVER_SNAP_BACKOFF_MULTIPLIER", ""
+                    ),
+                    "KINDLY_NODRIVER_ENSURE_NO_PROXY_LOCALHOST": os.environ.get(
+                        "KINDLY_NODRIVER_ENSURE_NO_PROXY_LOCALHOST", ""
+                    ),
+                    "NO_PROXY": os.environ.get("NO_PROXY", ""),
+                    "no_proxy": os.environ.get("no_proxy", ""),
+                },
             },
         )
     sys.stdout = _NullTextIO(original_stdout)
     sys.stderr = _NullTextIO(original_stderr)
 
-    worker_timeout_seconds = _resolve_worker_timeout_seconds()
+    (
+        worker_timeout_seconds,
+        clamped_value,
+        grace_seconds,
+        clamped,
+        used_default,
+        invalid,
+        raw_value,
+    ) = _resolve_worker_timeout_details()
+    _emit_diag(
+        "worker.timeout_budget",
+        "Resolved worker timeout budget",
+        {
+            "raw_value": raw_value,
+            "clamped_value": clamped_value,
+            "effective_timeout_seconds": worker_timeout_seconds,
+            "grace_seconds": grace_seconds,
+            "clamped": clamped,
+            "used_default": used_default,
+            "invalid": invalid,
+            "default_seconds": 60.0,
+        },
+    )
     try:
         html = await _fetch_html(
             args.url,
@@ -842,6 +974,11 @@ async def _main_async(args: argparse.Namespace) -> int:
             wait_seconds=args.wait_seconds,
             browser_executable_path=args.browser_executable_path,
             overall_timeout_seconds=worker_timeout_seconds,
+        )
+        _emit_diag(
+            "worker.done",
+            "Worker completed",
+            {"html_len": len(html or "")},
         )
     except Exception as exc:
         # Keep stderr minimal (no traceback) to avoid bloating the parent error string.
