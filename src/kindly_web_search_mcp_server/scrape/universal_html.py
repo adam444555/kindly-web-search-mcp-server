@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -169,6 +170,22 @@ STREAM_READ_CHUNK = 16_384
 STREAM_PROGRESS_INTERVAL_SECONDS = 2.0
 STREAM_PROGRESS_MIN_BYTES = 64 * 1024
 STREAM_HEARTBEAT_INTERVAL_SECONDS = 2.0
+PIPE_PROBE_TIMEOUT_SECONDS = 3.0
+PIPE_PROBE_OUTPUT_BYTES = 4 * 1024
+PIPE_PROBE_SAMPLE_LIMIT = 400
+
+
+def _subprocess_launch_options() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    creationflags = 0
+    creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    startupinfo = subprocess.STARTUPINFO()
+    if hasattr(subprocess, "STARTF_USESHOWWINDOW"):
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    return {"creationflags": creationflags, "startupinfo": startupinfo}
 
 
 def _append_tail_text(existing: str, addition: str, *, limit: int) -> str:
@@ -238,6 +255,150 @@ def _maybe_emit_stream_progress(
         },
     )
     return now, bytes_read
+
+
+async def _read_probe_stream(
+    stream: asyncio.StreamReader | None,
+    *,
+    byte_limit: int,
+) -> tuple[bytes, int, float | None]:
+    if stream is None:
+        return b"", 0, None
+    buffer = bytearray()
+    bytes_read = 0
+    first_byte_at: float | None = None
+    while True:
+        chunk = await stream.read(STREAM_READ_CHUNK)
+        if not chunk:
+            break
+        if first_byte_at is None:
+            first_byte_at = time.monotonic()
+        bytes_read += len(chunk)
+        if len(buffer) < byte_limit:
+            remaining = byte_limit - len(buffer)
+            buffer.extend(chunk[:remaining])
+    return bytes(buffer), bytes_read, first_byte_at
+
+
+async def _run_pipe_probe(
+    *,
+    executable: str,
+    env: dict[str, str],
+    diagnostics: Diagnostics,
+) -> None:
+    probe_payload = (
+        "import sys; "
+        f"data='x'*{PIPE_PROBE_OUTPUT_BYTES}; "
+        "sys.stdout.write(data); sys.stdout.flush(); "
+        "sys.stderr.write('probe stderr\\n'); sys.stderr.flush()"
+    )
+    cmd = [executable, "-u", "-c", probe_payload]
+    diagnostics.emit(
+        "worker.pipe_probe_started",
+        "Initiating pipe probe",
+        {
+            "timeout_seconds": PIPE_PROBE_TIMEOUT_SECONDS,
+            "output_bytes": PIPE_PROBE_OUTPUT_BYTES,
+            "executable": executable,
+        },
+    )
+    loop = asyncio.get_running_loop()
+    policy = asyncio.get_event_loop_policy()
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        **_subprocess_launch_options(),
+    )
+    probe_started = time.monotonic()
+    stdout_task = asyncio.create_task(
+        _read_probe_stream(proc.stdout, byte_limit=PIPE_PROBE_OUTPUT_BYTES)
+    )
+    stderr_task = asyncio.create_task(
+        _read_probe_stream(proc.stderr, byte_limit=PIPE_PROBE_OUTPUT_BYTES)
+    )
+    wait_task = asyncio.create_task(proc.wait())
+    killed = False
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(stdout_task, stderr_task, wait_task),
+            timeout=PIPE_PROBE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as exc:
+        for task in (stdout_task, stderr_task, wait_task):
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.gather(stdout_task, stderr_task, wait_task)
+        await _terminate_process_tree(proc)
+        killed = True
+        diagnostics.emit(
+            "worker.pipe_probe_error",
+            "Pipe probe timed out",
+            {
+                "error": type(exc).__name__,
+                "detail": str(exc),
+                "killed": killed,
+                "event_loop": loop.__class__.__name__,
+                "event_loop_policy": policy.__class__.__name__,
+                "elapsed_ms": int((time.monotonic() - probe_started) * 1000),
+            },
+        )
+        return
+    except Exception as exc:
+        for task in (stdout_task, stderr_task, wait_task):
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.gather(stdout_task, stderr_task, wait_task)
+        await _terminate_process_tree(proc)
+        killed = True
+        diagnostics.emit(
+            "worker.pipe_probe_error",
+            "Pipe probe failed",
+            {
+                "error": type(exc).__name__,
+                "detail": str(exc),
+                "killed": killed,
+                "event_loop": loop.__class__.__name__,
+                "event_loop_policy": policy.__class__.__name__,
+                "elapsed_ms": int((time.monotonic() - probe_started) * 1000),
+            },
+        )
+        return
+
+    stdout_bytes, stdout_len, stdout_first = stdout_task.result()
+    stderr_bytes, stderr_len, stderr_first = stderr_task.result()
+    stdout_sample, stdout_truncated, stdout_sample_len = truncate_text(
+        stdout_bytes.decode("utf-8", errors="replace"), PIPE_PROBE_SAMPLE_LIMIT
+    )
+    stderr_sample, stderr_truncated, stderr_sample_len = truncate_text(
+        stderr_bytes.decode("utf-8", errors="replace"), PIPE_PROBE_SAMPLE_LIMIT
+    )
+    diagnostics.emit(
+        "worker.pipe_probe",
+        "Pipe probe completed",
+        {
+            "stdout_len": stdout_len,
+            "stderr_len": stderr_len,
+            "stdout_sample": stdout_sample,
+            "stderr_sample": stderr_sample,
+            "stdout_sample_len": stdout_sample_len,
+            "stderr_sample_len": stderr_sample_len,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "exit_code": proc.returncode,
+            "time_to_first_stdout_ms": (
+                None if stdout_first is None else int((stdout_first - probe_started) * 1000)
+            ),
+            "time_to_first_stderr_ms": (
+                None if stderr_first is None else int((stderr_first - probe_started) * 1000)
+            ),
+            "elapsed_ms": int((time.monotonic() - probe_started) * 1000),
+            "event_loop": loop.__class__.__name__,
+            "event_loop_policy": policy.__class__.__name__,
+        },
+    )
 
 
 async def _read_stdout_stream(
@@ -402,6 +563,23 @@ async def fetch_html_via_nodriver(
         env["KINDLY_REQUEST_ID"] = diagnostics.request_id
     _ensure_no_proxy_localhost_env(env)
 
+    if diagnostics and diagnostics.enabled:
+        env["PYTHONUNBUFFERED"] = "1"
+        diagnostics.emit(
+            "worker.diagnostics_state",
+            "Diagnostics state check",
+            {
+                "enabled": diagnostics.enabled,
+                "type": diagnostics.__class__.__name__,
+                "probe_will_run": diagnostics.enabled,
+            },
+        )
+        await _run_pipe_probe(
+            executable=sys.executable,
+            env=env,
+            diagnostics=diagnostics,
+        )
+
     if diagnostics:
         env_snapshot = {
             "KINDLY_BROWSER_EXECUTABLE_PATH": env.get("KINDLY_BROWSER_EXECUTABLE_PATH", ""),
@@ -438,9 +616,11 @@ async def fetch_html_via_nodriver(
     started = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        **_subprocess_launch_options(),
     )
     stdout_state: _StdoutAccumulator | None = None
     stderr_state: _StderrAccumulator | None = None
