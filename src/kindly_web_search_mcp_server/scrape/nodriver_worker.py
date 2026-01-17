@@ -228,6 +228,18 @@ def _resolve_devtools_ready_timeout_seconds() -> float:
     return max(0.5, min(value, 120.0))
 
 
+def _resolve_worker_timeout_seconds() -> float:
+    raw = (os.environ.get("KINDLY_HTML_TOTAL_TIMEOUT_SECONDS") or "").strip()
+    try:
+        value = float(raw) if raw else 60.0
+    except ValueError:
+        value = 60.0
+    value = max(1.0, min(value, 300.0))
+    # Leave a grace window for parent-side cleanup on Windows.
+    grace = min(10.0, max(5.0, value * 0.2))
+    return max(1.0, value - grace)
+
+
 def _split_no_proxy_value(raw: str) -> list[str]:
     out: list[str] = []
     for item in (raw or "").split(","):
@@ -409,6 +421,7 @@ async def _fetch_html(
     user_agent: str,
     wait_seconds: float,
     browser_executable_path: str | None,
+    overall_timeout_seconds: float,
 ) -> str:
     try:
         import nodriver as uc  # type: ignore
@@ -417,6 +430,7 @@ async def _fetch_html(
             "nodriver is required for universal HTML loading. Install with: pip install nodriver"
         ) from exc
 
+    started = time.monotonic()
     browser = None
     page = None
     ref_page = None
@@ -441,6 +455,8 @@ async def _fetch_html(
         "--disable-blink-features=AutomationControlled",
         "--disable-logging",
         "--log-level=3",
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
         f"--user-agent={user_agent}",
     ]
 
@@ -496,27 +512,40 @@ async def _fetch_html(
                     f"nodriver failed to start browser after {attempts} attempt(s)"
                 ) from last_start_error
 
-            if referer:
-                ref_page = await browser.get(referer)
-                await asyncio.sleep(0.25)
+            async def _navigate_and_extract() -> str:
+                nonlocal page, ref_page
+                if referer:
+                    ref_page = await browser.get(referer)
+                    await asyncio.sleep(0.25)
 
-            page = await browser.get(url)
-            await asyncio.sleep(wait_seconds)
+                page = await browser.get(url)
+                await asyncio.sleep(wait_seconds)
 
-            getter = getattr(page, "get_content", None)
-            if callable(getter):
-                content = getter()
-                if asyncio.iscoroutine(content):
-                    content = await content
-            else:
-                getter = getattr(page, "content", None)
-                content = getter()
-                if asyncio.iscoroutine(content):
-                    content = await content
+                getter = getattr(page, "get_content", None)
+                if callable(getter):
+                    content = getter()
+                    if asyncio.iscoroutine(content):
+                        content = await content
+                else:
+                    getter = getattr(page, "content", None)
+                    content = getter()
+                    if asyncio.iscoroutine(content):
+                        content = await content
+                return str(content or "")
+
+            remaining = overall_timeout_seconds - (time.monotonic() - started)
+            if remaining <= 0:
+                raise TimeoutError("Navigation timed out before start")
+            try:
+                content = await asyncio.wait_for(_navigate_and_extract(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"Navigation timed out after {overall_timeout_seconds:.1f}s"
+                ) from exc
 
             if isinstance(content, (bytes, bytearray)):
                 return bytes(content).decode("utf-8", errors="ignore")
-            return str(content or "")
+            return content
         except Exception as exc:
             msg = str(exc).lower()
             if "failed to connect to browser" in msg or "devtools endpoint did not become ready" in msg:
@@ -569,6 +598,7 @@ async def _main_async(args: argparse.Namespace) -> int:
     sys.stdout = _NullTextIO(original_stdout)
     sys.stderr = _NullTextIO(original_stderr)
 
+    worker_timeout_seconds = _resolve_worker_timeout_seconds()
     try:
         html = await _fetch_html(
             args.url,
@@ -576,6 +606,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             user_agent=args.user_agent,
             wait_seconds=args.wait_seconds,
             browser_executable_path=args.browser_executable_path,
+            overall_timeout_seconds=worker_timeout_seconds,
         )
     except Exception as exc:
         # Keep stderr minimal (no traceback) to avoid bloating the parent error string.

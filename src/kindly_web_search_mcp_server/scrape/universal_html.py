@@ -107,6 +107,40 @@ def _ensure_no_proxy_localhost_env(env: dict[str, str]) -> None:
             env[key] = ",".join(merged)
 
 
+async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+
+    if os.name == "nt":
+        with contextlib.suppress(Exception):
+            proc.terminate()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(proc.wait(), timeout=1.5)
+        if proc.returncode is None and proc.pid is not None:
+            with contextlib.suppress(Exception):
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/T",
+                    "/F",
+                    "/PID",
+                    str(proc.pid),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await killer.wait()
+                if killer.returncode not in (0, None):
+                    with contextlib.suppress(Exception):
+                        proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        return
+
+    with contextlib.suppress(Exception):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        await proc.wait()
+
+
 async def fetch_html_via_nodriver(
     url: str,
     *,
@@ -164,14 +198,10 @@ async def fetch_html_via_nodriver(
             proc.communicate(), timeout=timeout_seconds
         )
     except asyncio.TimeoutError:
-        with contextlib.suppress(Exception):
-            proc.kill()
-        with contextlib.suppress(Exception):
-            await proc.wait()
+        await _terminate_process_tree(proc)
         raise
     except asyncio.CancelledError:
-        with contextlib.suppress(Exception):
-            proc.kill()
+        await _terminate_process_tree(proc)
         raise
 
     if proc.returncode != 0:
