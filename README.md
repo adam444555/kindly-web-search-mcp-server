@@ -517,6 +517,7 @@ docker run --rm -p 8000:8000 \
   - Env vars:
     - `KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS`: total time budget per `web_search` / `get_content` call (search + extraction). Default: `120`.
     - `KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS`: caps the above value (safety). Default: `600`.
+    - `KINDLY_WEB_SEARCH_MAX_CONCURRENCY`: max parallel content fetches. Defaults: `1` on Windows, `3` elsewhere (when unset or invalid).
   - Recommended starting point (PowerShell):
     - `$env:KINDLY_TOOL_TOTAL_TIMEOUT_SECONDS="180"`
     - `$env:KINDLY_TOOL_TOTAL_TIMEOUT_MAX_SECONDS="600"`
