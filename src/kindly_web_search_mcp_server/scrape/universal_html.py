@@ -168,6 +168,7 @@ class _StderrAccumulator:
 STREAM_READ_CHUNK = 16_384
 STREAM_PROGRESS_INTERVAL_SECONDS = 2.0
 STREAM_PROGRESS_MIN_BYTES = 64 * 1024
+STREAM_HEARTBEAT_INTERVAL_SECONDS = 2.0
 
 
 def _append_tail_text(existing: str, addition: str, *, limit: int) -> str:
@@ -297,6 +298,29 @@ async def _read_stderr_stream(
             last_emit_bytes=state.last_emit_bytes,
         )
 
+
+async def _emit_worker_heartbeat(
+    proc: asyncio.subprocess.Process,
+    stdout_state: _StdoutAccumulator,
+    stderr_state: _StderrAccumulator,
+    *,
+    diagnostics: Diagnostics | None,
+    started: float,
+) -> None:
+    if diagnostics is None:
+        return
+    while proc.returncode is None:
+        diagnostics.emit(
+            "worker.heartbeat",
+            "Worker heartbeat",
+            {
+                "stdout_bytes": stdout_state.bytes_read,
+                "stderr_bytes": stderr_state.bytes_read,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            },
+        )
+        await asyncio.sleep(STREAM_HEARTBEAT_INTERVAL_SECONDS)
+
 async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
@@ -317,7 +341,11 @@ async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
-                await killer.wait()
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(killer.wait(), timeout=2.0)
+                if killer.returncode is None:
+                    with contextlib.suppress(Exception):
+                        killer.kill()
                 if killer.returncode not in (0, None):
                     with contextlib.suppress(Exception):
                         proc.kill()
@@ -419,6 +447,7 @@ async def fetch_html_via_nodriver(
     stdout_task: asyncio.Task[None] | None = None
     stderr_task: asyncio.Task[None] | None = None
     wait_task: asyncio.Task[int] | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
     if diagnostics:
         loop = asyncio.get_running_loop()
         policy = asyncio.get_event_loop_policy()
@@ -480,15 +509,25 @@ async def fetch_html_via_nodriver(
                 tail_limit=MAX_STDERR_CHARS,
             )
         )
+        heartbeat_task = asyncio.create_task(
+            _emit_worker_heartbeat(
+                proc,
+                stdout_state,
+                stderr_state,
+                diagnostics=diagnostics,
+                started=started,
+            )
+        )
         wait_task = asyncio.create_task(proc.wait())
         await asyncio.wait_for(
-            asyncio.gather(stdout_task, stderr_task, wait_task), timeout=timeout_seconds
+            asyncio.gather(stdout_task, stderr_task, heartbeat_task, wait_task),
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        for task in (stdout_task, stderr_task, wait_task):
+        for task in (stdout_task, stderr_task, heartbeat_task, wait_task):
             if task is not None:
                 task.cancel()
-        for task in (stdout_task, stderr_task, wait_task):
+        for task in (stdout_task, stderr_task, heartbeat_task, wait_task):
             if task is None:
                 continue
             with contextlib.suppress(asyncio.CancelledError):
@@ -524,10 +563,10 @@ async def fetch_html_via_nodriver(
             )
         raise
     except asyncio.CancelledError:
-        for task in (stdout_task, stderr_task, wait_task):
+        for task in (stdout_task, stderr_task, heartbeat_task, wait_task):
             if task is not None:
                 task.cancel()
-        for task in (stdout_task, stderr_task, wait_task):
+        for task in (stdout_task, stderr_task, heartbeat_task, wait_task):
             if task is None:
                 continue
             with contextlib.suppress(asyncio.CancelledError):
