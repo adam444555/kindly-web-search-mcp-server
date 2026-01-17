@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib
+import importlib.util
 import io
 import os
+import re
 import shutil
 import signal
 import socket
@@ -98,6 +101,120 @@ def _safe_write_bytes(stream: TextIO, data: bytes) -> None:
         os.write(1, payload)
     except Exception:
         return
+
+
+_CODING_COOKIE_RE = re.compile(r"coding[:=]\s*([-\w.]+)")
+
+
+def _get_encoding_cookie(lines: list[bytes]) -> str | None:
+    for idx in range(min(2, len(lines))):
+        line = lines[idx]
+        if idx == 0 and line.startswith(b"\xef\xbb\xbf"):
+            line = line[3:]
+        try:
+            text = line.decode("latin-1")
+        except Exception:
+            text = line.decode("latin-1", errors="ignore")
+        match = _CODING_COOKIE_RE.search(text)
+        if match:
+            return match.group(1).lower()
+    return None
+
+
+def _has_encoding_cookie(lines: list[bytes]) -> bool:
+    return _get_encoding_cookie(lines) is not None
+
+
+def _line_ending_for(lines: list[bytes]) -> bytes:
+    for line in lines[:2]:
+        if line.endswith(b"\r\n"):
+            return b"\r\n"
+        if line.endswith(b"\n"):
+            return b"\n"
+    return b"\n"
+
+
+def _inject_encoding_cookie(lines: list[bytes]) -> list[bytes]:
+    line_ending = _line_ending_for(lines)
+    # nodriver CDP sources contain non-UTF-8 bytes; latin-1 keeps raw bytes stable.
+    cookie = b"# coding: latin-1" + line_ending
+    if lines and lines[0].startswith(b"#!"):
+        return [lines[0], cookie] + lines[1:]
+    return [cookie] + lines
+
+
+def _is_non_utf8_syntax_error(exc: SyntaxError) -> bool:
+    msg = str(getattr(exc, "msg", "") or exc).lower()
+    return "non-utf-8" in msg or "encoding problem" in msg
+
+
+def _is_nodriver_network_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    return normalized.endswith("/nodriver/cdp/network.py")
+
+
+def _resolve_nodriver_network_path(exc: SyntaxError) -> str | None:
+    filename = getattr(exc, "filename", None)
+    if filename:
+        resolved = os.path.realpath(filename)
+        if _is_nodriver_network_path(resolved):
+            return resolved
+
+    spec = importlib.util.find_spec("nodriver.cdp.network")
+    if spec and spec.origin:
+        resolved = os.path.realpath(spec.origin)
+        if _is_nodriver_network_path(resolved):
+            return resolved
+
+    return None
+
+
+def _clear_nodriver_modules() -> None:
+    for key in list(sys.modules):
+        if key == "nodriver" or key.startswith("nodriver."):
+            sys.modules.pop(key, None)
+
+
+def _patch_nodriver_network_encoding(exc: SyntaxError) -> bool:
+    if not _is_non_utf8_syntax_error(exc):
+        return False
+
+    path = _resolve_nodriver_network_path(exc)
+    if not path:
+        return False
+
+    try:
+        with open(path, "rb") as handle:
+            content = handle.read()
+    except FileNotFoundError as file_exc:
+        raise RuntimeError(f"nodriver network.py not found at {path}") from file_exc
+    except PermissionError as file_exc:
+        raise RuntimeError(f"nodriver network.py is not writable at {path}") from file_exc
+
+    lines = content.splitlines(keepends=True)
+    if _has_encoding_cookie(lines):
+        return True
+
+    updated_lines = _inject_encoding_cookie(lines)
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix="._nodriver_", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as tmp_handle:
+            tmp_handle.writelines(updated_lines)
+            tmp_handle.flush()
+            os.fsync(tmp_handle.fileno())
+        try:
+            os.replace(tmp_path, path)
+        except OSError as replace_exc:
+            raise RuntimeError(f"Failed to replace nodriver network.py at {path}") from replace_exc
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+    return True
 
 
 def _suppress_unraisable_exceptions() -> None:
@@ -425,6 +542,22 @@ async def _fetch_html(
 ) -> str:
     try:
         import nodriver as uc  # type: ignore
+    except SyntaxError as exc:  # pragma: no cover
+        should_retry = _patch_nodriver_network_encoding(exc)
+        if should_retry:
+            _clear_nodriver_modules()
+            importlib.invalidate_caches()
+            try:
+                import nodriver as uc  # type: ignore
+            except Exception as retry_exc:
+                raise RuntimeError(
+                    "nodriver import failed after encoding check. "
+                    f"Original error: {exc}. Retry error: {retry_exc}"
+                ) from retry_exc
+        else:
+            raise RuntimeError(
+                "nodriver is required for universal HTML loading. Install with: pip install nodriver"
+            ) from exc
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
             "nodriver is required for universal HTML loading. Install with: pip install nodriver"
