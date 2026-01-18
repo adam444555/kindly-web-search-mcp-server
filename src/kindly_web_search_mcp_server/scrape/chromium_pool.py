@@ -16,6 +16,7 @@ from . import nodriver_worker as worker
 
 DEFAULT_POOL_SIZE = 1
 DEFAULT_ACQUIRE_TIMEOUT_SECONDS = 30.0
+POOL_HEALTH_TIMEOUT_SECONDS = 2.0
 
 
 def _resolve_reuse_enabled() -> bool:
@@ -133,7 +134,41 @@ class ChromiumSlot:
         diagnostics: Diagnostics | None,
     ) -> None:
         if self.proc is not None and self.proc.returncode is None:
-            return
+            if self.port is None:
+                if diagnostics:
+                    diagnostics.emit(
+                        "pool.slot_probe_failed",
+                        "Pooled Chromium missing port",
+                        {"slot_id": self.slot_id},
+                    )
+                await self.terminate()
+            else:
+                try:
+                    await worker._wait_for_devtools_ready(
+                        host=self.host,
+                        port=self.port,
+                        proc=self.proc,
+                        timeout_seconds=POOL_HEALTH_TIMEOUT_SECONDS,
+                    )
+                    if diagnostics:
+                        diagnostics.emit(
+                            "pool.slot_probe",
+                            "Pooled Chromium health check ok",
+                            {"slot_id": self.slot_id, "port": self.port},
+                        )
+                    return
+                except Exception as exc:
+                    if diagnostics:
+                        diagnostics.emit(
+                            "pool.slot_probe_failed",
+                            "Pooled Chromium health check failed",
+                            {
+                                "slot_id": self.slot_id,
+                                "port": self.port,
+                                "error": type(exc).__name__,
+                            },
+                        )
+                    await self.terminate()
         await self._start(user_agent=user_agent, port_range=port_range, diagnostics=diagnostics)
 
     async def _start(

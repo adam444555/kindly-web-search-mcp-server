@@ -608,7 +608,6 @@ async def _fetch_html(
 ) -> str:
     try:
         import nodriver as uc  # type: ignore
-        cdp = uc.cdp
     except SyntaxError as exc:  # pragma: no cover
         should_retry = _patch_nodriver_network_encoding(exc)
         if should_retry:
@@ -629,6 +628,7 @@ async def _fetch_html(
         raise RuntimeError(
             "nodriver is required for universal HTML loading. Install with: pip install nodriver"
         ) from exc
+    cdp = uc.cdp
 
     started = time.monotonic()
     browser = None
@@ -732,11 +732,24 @@ async def _fetch_html(
         if page_targets:
             return page_targets[0]
 
-        target_id = await browser.connection.send(
-            cdp.target.create_target(
-                "about:blank", new_window=False, enable_begin_frame_control=True
+        try:
+            target_id = await browser.connection.send(
+                cdp.target.create_target(
+                    "about:blank", new_window=False, enable_begin_frame_control=True
+                )
             )
-        )
+        except Exception as exc:
+            _emit_diag(
+                "worker.reuse_target_failed",
+                "Failed to create pooled target",
+                {
+                    "error": type(exc).__name__,
+                    "detail": str(exc),
+                },
+            )
+            raise RuntimeError(
+                "Failed to create pooled target; pooled browser may be unavailable."
+            ) from exc
         _emit_diag(
             "worker.reuse_target_created",
             "Created pooled target",

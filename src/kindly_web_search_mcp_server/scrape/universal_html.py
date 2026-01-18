@@ -540,7 +540,7 @@ async def fetch_html_via_nodriver(
     - The worker writes only HTML to stdout; all incidental output is discarded in the worker.
     """
 
-    cmd = [
+    base_cmd = [
         sys.executable,
         "-m",
         "kindly_web_search_mcp_server.scrape.nodriver_worker",
@@ -552,7 +552,7 @@ async def fetch_html_via_nodriver(
         str(config.wait_seconds),
     ]
     if referer:
-        cmd.extend(["--referer", referer])
+        base_cmd.extend(["--referer", referer])
 
     pool = None
     slot = None
@@ -571,22 +571,26 @@ async def fetch_html_via_nodriver(
             slot = None
     if slot is None:
         use_pool = False
-    if slot is not None:
-        cmd.extend(
-            [
-                "--remote-host",
-                slot.host,
-                "--remote-port",
-                str(slot.port or 0),
-                "--reuse-browser",
-            ]
-        )
-        if slot.user_data_dir is not None:
-            cmd.extend(["--user-data-dir", slot.user_data_dir.name])
+    def _compose_cmd(active_slot: ChromiumSlot | None) -> list[str]:
+        cmd = list(base_cmd)
+        if active_slot is not None:
+            cmd.extend(
+                [
+                    "--remote-host",
+                    active_slot.host,
+                    "--remote-port",
+                    str(active_slot.port or 0),
+                    "--reuse-browser",
+                ]
+            )
+            if active_slot.user_data_dir is not None:
+                cmd.extend(["--user-data-dir", active_slot.user_data_dir.name])
+        if browser_executable_path:
+            cmd.extend(["--browser-executable-path", browser_executable_path])
+        return cmd
 
     browser_executable_path = _resolve_browser_executable_path()
-    if browser_executable_path:
-        cmd.extend(["--browser-executable-path", browser_executable_path])
+    cmd = _compose_cmd(slot)
 
     env = _maybe_add_src_to_pythonpath(dict(os.environ))
     if diagnostics and diagnostics.enabled:
@@ -611,7 +615,9 @@ async def fetch_html_via_nodriver(
             diagnostics=diagnostics,
         )
 
-    if diagnostics:
+    def _emit_worker_spawn(active_cmd: list[str]) -> None:
+        if diagnostics is None:
+            return
         env_snapshot = {
             "KINDLY_BROWSER_EXECUTABLE_PATH": env.get("KINDLY_BROWSER_EXECUTABLE_PATH", ""),
             "KINDLY_HTML_TOTAL_TIMEOUT_SECONDS": env.get("KINDLY_HTML_TOTAL_TIMEOUT_SECONDS", ""),
@@ -639,10 +645,12 @@ async def fetch_html_via_nodriver(
                 "referer": referer or "",
                 "user_agent": config.user_agent,
                 "wait_seconds": config.wait_seconds,
-                "cmd": cmd,
+                "cmd": active_cmd,
                 "env": mask_env_values(env_snapshot),
             },
         )
+
+    _emit_worker_spawn(cmd)
 
     async def _run_worker() -> str:
         started = time.monotonic()
@@ -850,7 +858,56 @@ async def fetch_html_via_nodriver(
 
         return bytes(stdout_state.buffer).decode("utf-8", errors="ignore")
 
+    def _exception_message_chain(exc: Exception) -> str:
+        parts: list[str] = []
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            detail = str(current)
+            if detail:
+                parts.append(detail)
+            current = current.__cause__ or current.__context__
+        return " | ".join(parts).lower()
+
+    def _pool_error_requires_restart(exc: Exception) -> bool:
+        message = _exception_message_chain(exc)
+        patterns = (
+            "nodriver worker failed",
+            "protocol exception",
+            "no browser is open",
+            "failed to open new tab",
+            "failed to create pooled target",
+            "failed to connect to pooled browser",
+            "devtools endpoint did not become ready",
+            "connection refused",
+        )
+        return any(pattern in message for pattern in patterns)
+
     try:
+        return await _run_worker()
+    except Exception as exc:
+        if slot is None or pool is None:
+            raise
+        if not _pool_error_requires_restart(exc):
+            raise
+        if diagnostics:
+            diagnostics.emit(
+                "pool.slot_restart",
+                "Restarting pooled Chromium after worker failure",
+                {
+                    "slot_id": slot.slot_id,
+                    "error": type(exc).__name__,
+                    "detail": _exception_message_chain(exc),
+                },
+            )
+        await slot.terminate()
+        await pool.release(slot, diagnostics=diagnostics)
+        slot = await pool.acquire(user_agent=config.user_agent, diagnostics=diagnostics)
+        if slot is None:
+            raise
+        cmd = _compose_cmd(slot)
+        _emit_worker_spawn(cmd)
         return await _run_worker()
     finally:
         if slot is not None and pool is not None:
