@@ -527,6 +527,7 @@ docker run --rm -p 8000:8000 \
   - `KINDLY_NODRIVER_BROWSER_POOL_SIZE=2` controls how many Chromium instances are kept warm.
   - `KINDLY_NODRIVER_ACQUIRE_TIMEOUT_SECONDS=30` controls how long to wait for a pooled slot before falling back to per-request Chromium.
   - Optional: `KINDLY_NODRIVER_PORT_RANGE=45000-45100` restricts remote debugging ports.
+  - Pooled slots are health-checked before use and auto-restarted if the DevTools endpoint is stale (diagnostics emit `pool.slot_probe` and `pool.slot_restart`).
   - If pool acquisition times out or fails, the server falls back to per-request Chromium and emits a `pool.acquire_timeout`/`pool.slot_error` diagnostic when diagnostics are enabled.
 - Need deeper debugging? Enable diagnostics:
   - Set `KINDLY_DIAGNOSTICS=1` to emit JSON-line diagnostics to stderr and include `diagnostics` in tool responses.
